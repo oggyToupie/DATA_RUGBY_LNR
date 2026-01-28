@@ -730,15 +730,7 @@ if page == "Visualisation joueur":
     # ------------------------------------------------------------------------------
     # 3)  LIGNE DU JOUEUR  (toujours trouvée dans le df complet)
     # ------------------------------------------------------------------------------
-    joueur_match = df[df['player_key'] == joueur_key]
-    if joueur_match.empty:
-        fallback_match = df_all[df_all["player_key"] == joueur_key]
-        if fallback_match.empty:
-            st.warning("Le joueur sélectionné n'existe pas pour ces filtres.")
-            st.stop()
-        joueur = fallback_match.iloc[0]
-    else:
-        joueur = joueur_match.iloc[0]
+    joueur = df[df['player_key'] == joueur_key].iloc[0]
 
     # Radar
     # Radar et infos joueur
@@ -747,7 +739,7 @@ if page == "Visualisation joueur":
     col_1, col_2 = st.columns([3, 2])  # radar plus large
 
     with col_1:
-        joueur = df_all[df_all["player_key"] == joueur_key].iloc[0]
+        joueur = df[df["player_key"] == joueur_key].iloc[0]
         fig = radar_player_vs_median(df, joueur, features , compare_group=compare_group)
         st.plotly_chart(fig, use_container_width=True)  # use_container_width gère mieux la responsivité
 
