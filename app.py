@@ -2,6 +2,8 @@
 # app.py   (lance:  streamlit run app.py)
 # --------------------------------------------------------------
 import sqlite3, pickle, os
+import re
+import unicodedata
 import numpy as np, pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -14,9 +16,48 @@ from matplotlib import cm
 import base64
 
 def get_image_base64(path):
+    if not path or not os.path.exists(path):
+        return None
     with open(path, "rb") as f:
         data = f.read()
     return base64.b64encode(data).decode()
+
+
+def slugify(value):
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join([c for c in value if not unicodedata.combining(c)])
+    value = value.lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    return value.strip("-")
+
+
+def find_club_asset(club, folder, exts):
+    if not club:
+        return None
+    slug = slugify(club)
+    for ext in exts:
+        path = os.path.join("images", "clubs", folder, f"{slug}.{ext}")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def club_logo_path(club):
+    return find_club_asset(club, "logos", ["jpg", "png", "webp"])
+
+
+def club_banner_path(club):
+    return find_club_asset(club, "banners", ["webp", "jpg", "png"])
+
+
+def player_photo_path(player_id):
+    if player_id is None:
+        return None
+    for ext in ["jpg", "png", "webp"]:
+        path = os.path.join("images", "players", f"{player_id}.{ext}")
+        if os.path.exists(path):
+            return path
+    return None
 
 
 import streamlit as st
@@ -26,8 +67,8 @@ st.set_page_config(page_title="Rugby Stats", layout="wide")
 # -----------------------------------------------------------------
 # CONSTANTES – à adapter
 # -----------------------------------------------------------------
-DB_FILE  = "top14_players.db"
-TABLE    = "players"
+DB_FILE  = "lnr_stats_flat.sqlite"
+TABLE    = "player_season"
 
 POSTES_LAYOUT = [
         ['Pilier gauche', 'Talonneur', 'Pilier droit'],                         # 1-2-3
@@ -50,22 +91,85 @@ POSTES_BDD_NAME = {
     }
 
 
-REF_TEAM = {           # ids de joueurs « équipe de référence »
-    "Pilier gauche": 2451, "Talonneur": 2445, "Pilier droit": 2448,
-    "2ème ligne gauche": 2405, "2ème ligne droit": 2498,
-    "3ème ligne aile fermée": 2453, "3ème ligne centre": 2462, "3ème ligne aile ouverte": 2425,
-    "Demi de mêlée": 2449, "Demi d'ouverture": 2436,
-    "Ailier gauche": 12335, "Premier Centre": 2493, "Deuxième Centre": 2503, "Ailier droit": 2483,
-    "Arrière": 2450
-}
+REF_TEAM = {}
+
+# ────────────────────────────────────────────────────────────────────
+# 0)  Liste complète des variables qu’on peut afficher
+# ────────────────────────────────────────────────────────────────────
+ALL_STATS = ['age', 'taille_cm', 'poids_kg', 'ratio_metres_courses' , 'ratio_poids_taille' , 'ratio_min_matchs',
+             'nombre_matchs_joues', 'nombre_matchs_commences', 'temps_jeu_min', 'points_marques',
+             'essais', 'penales', 'penales_pct', 'transformations', 'transformations_pct', 'drops_pct',
+             'ballon_joues_pied', 'metres_pied', 'courses', 'metres_parcourus', 'passes', 'franchissements',
+             'offloads', 'plaquages_casses', 'plaquages_reussis', 'plaquages_reussis_pct', 'ballon_grattes',
+             'interceptions', 'penales_concedees', 'carton_jaune', 'carton_rouge']
+
+DEFAULT_STATS = [
+    'courses','metres_parcourus','franchissements','offloads', 'metres_pied', 'points_marques' ,
+    'plaquages_reussis','ballon_grattes', 'taille_cm' , 'ratio_poids_taille', 'plaquages_casses'
+]
 
 # -----------------------------------------------------------------
-# LOAD DATA 
+# LOAD DATA
 # -----------------------------------------------------------------
 @st.cache_data
 def load_players():
     with sqlite3.connect(DB_FILE) as con:
         df = pd.read_sql(f"SELECT * FROM {TABLE}", con)
+
+    rename_map = {
+        "player_numeric_id": "player_id",
+        "name": "nom",
+        "position": "poste",
+        "nationality": "pays",
+        "age_years": "age",
+        "height_cm": "taille_cm",
+        "weight_kg": "poids_kg",
+        "matches_played": "nombre_matchs_joues",
+        "matches_started": "nombre_matchs_commences",
+        "minutes_played": "temps_jeu_min",
+        "points": "points_marques",
+        "offense_essais": "essais",
+        "offense_penalites_value": "penales",
+        "offense_penalites_success_pct": "penales_pct",
+        "offense_transformations_value": "transformations",
+        "offense_transformations_success_pct": "transformations_pct",
+        "offense_drops_success_pct": "drops_pct",
+        "offense_ballons_joues_au_pied": "ballon_joues_pied",
+        "offense_metres_au_pied": "metres_pied",
+        "offense_courses": "courses",
+        "offense_metres_parcourus": "metres_parcourus",
+        "offense_passes": "passes",
+        "offense_franchissements": "franchissements",
+        "offense_offloads": "offloads",
+        "offense_plaquages_casses": "plaquages_casses",
+        "defense_plaquages_reussis_value": "plaquages_reussis",
+        "defense_plaquages_reussis_success_pct": "plaquages_reussis_pct",
+        "defense_ballons_grattes": "ballon_grattes",
+        "defense_interceptions": "interceptions",
+        "fouls_penalites_concedees": "penales_concedees",
+        "fouls_carton_jaune": "carton_jaune",
+        "fouls_carton_rouge": "carton_rouge",
+    }
+    df = df.rename(columns=rename_map)
+
+    df["competition"] = df.get("base_comp", "")
+    df["season"] = df.get("season", "")
+
+    df["player_key"] = (
+        df["player_id"].astype(str)
+        + "-"
+        + df["competition"].astype(str)
+        + "-"
+        + df["season"].astype(str)
+    )
+    df["player_label"] = (
+        df["nom"].astype(str)
+        + " ("
+        + df["season"].astype(str)
+        + " • "
+        + df["competition"].astype(str).str.upper()
+        + ")"
+    )
 
     # Création du ratio (cm / kg)
     df['ratio_poids_taille'] =  round(df['poids_kg'] / df['taille_cm'], 2)
@@ -76,41 +180,55 @@ def load_players():
     # Création du ratio (min / matchs)
     df['ratio_min_matchs'] =  round(df['temps_jeu_min'] / df['nombre_matchs_joues'], 2)
 
+    for col in ["ratio_poids_taille", "ratio_metres_courses", "ratio_min_matchs"]:
+        df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    for stat in ALL_STATS:
+        if stat not in df.columns:
+            df[stat] = 0
+
     return df
 
-df = load_players()
+df_all = load_players()
+
+with st.sidebar:
+    st.markdown("### Filtres globaux")
+    competitions = sorted(df_all["competition"].dropna().unique())
+    seasons = sorted(df_all["season"].dropna().unique())
+    sel_competitions = st.multiselect(
+        "Compétitions", options=competitions, default=competitions
+    )
+    sel_seasons = st.multiselect("Saisons", options=seasons, default=seasons)
+
+mask_global = pd.Series(True, index=df_all.index)
+if sel_competitions:
+    mask_global &= df_all["competition"].isin(sel_competitions)
+if sel_seasons:
+    mask_global &= df_all["season"].isin(sel_seasons)
+
+df = df_all[mask_global].copy()
+if df.empty:
+    st.warning("Aucune donnée ne correspond aux filtres sélectionnés.")
+    st.stop()
+
 exclude_exact = {
     'temps_jeu_min', 'taille_cm', 'poids_kg', 'age', 'nombre_matchs_joues', 'ratio_min_matchs',
-    'player_id', 'url', 'nom', 'club', 'poste', 'pays', 'scraped_at', 'ratio_poids_taille', 'ratio_metres_courses'
+    'player_id', 'nom', 'club', 'poste', 'pays', 'ratio_poids_taille', 'ratio_metres_courses',
+    'competition', 'season', 'player_key', 'player_label'
 }
 exclude_pct = [c for c in df.columns if c.endswith('_pct')]
 
 for col in df.select_dtypes('number'):
     if col in exclude_exact or col in exclude_pct:
         continue
-    df[col] = round(df[col] * 80 / df['temps_jeu_min'], 2)
+    denom = df['temps_jeu_min'].replace(0, np.nan)
+    df[col] = round(df[col] * 80 / denom, 2).fillna(0)
 
 # -----------------------------------------------------------------
 # OUTILS COMMUNS
 # -----------------------------------------------------------------
 
 import numpy as np, pandas as pd, plotly.graph_objects as go
-
-
-# ────────────────────────────────────────────────────────────────────
-# 0)  Liste complète des variables qu’on peut afficher
-# ────────────────────────────────────────────────────────────────────
-ALL_STATS = ['age', 'taille_cm', 'poids_kg', 'ratio_metres_courses' , 'ratio_poids_taille' , 'ratio_min_matchs',
-             'nombre_matchs_joues', 'nombre_matchs_commences', 'temps_jeu_min', 'points_marques', 
-             'essais', 'penales', 'penales_pct', 'transformations', 'transformations_pct', 'drops_pct', 
-             'ballon_joues_pied', 'metres_pied', 'courses', 'metres_parcourus', 'passes', 'franchissements', 
-             'offloads', 'plaquages_casses', 'plaquages_reussis', 'plaquages_reussis_pct', 'ballon_grattes', 
-             'interceptions', 'penales_concedees', 'carton_jaune', 'carton_rouge']
-
-DEFAULT_STATS = [
-    'courses','metres_parcourus','franchissements','offloads', 'metres_pied', 'points_marques' ,
-    'plaquages_reussis','ballon_grattes', 'taille_cm' , 'ratio_poids_taille', 'plaquages_casses'
-]
 
 
 ALL_POSTES = sorted(df['poste'].dropna().unique())
@@ -136,7 +254,7 @@ if "stats_sel" not in st.session_state:
 # 0)  Initialisation : 1er lancement de l’app
 # ------------------------------------------------------------------
 if "ref_player" not in st.session_state:
-    first_nom = df.sort_values("nom")['nom'].iloc[0]
+    first_nom = df.sort_values("nom")["player_key"].iloc[0]
     st.session_state.ref_player = first_nom            # valeur par défaut
 
 # ------------------------------------------------------------------
@@ -452,12 +570,27 @@ def radar_figure(
 
 
 
+def build_reference_team(df_source):
+    ref_team = {}
+    for pos in POSTES_ORDER:
+        group = POSTES_BDD_NAME[pos]
+        candidates = df_source[df_source["poste"] == group]
+        if candidates.empty:
+            ref_team[pos] = None
+            continue
+        best = candidates.sort_values("temps_jeu_min", ascending=False).iloc[0]
+        ref_team[pos] = best["player_key"]
+    return ref_team
 
 
+REF_TEAM = build_reference_team(df)
 
 
-def player_row(player_id):
-    return df.loc[df['player_id'] == player_id].iloc[0]
+def player_row(player_key):
+    match = df.loc[df["player_key"] == player_key]
+    if match.empty:
+        return None
+    return match.iloc[0]
 
 # -----------------------------------------------------------------
 # SESSION STATE INIT  (pour la feuille de match)
@@ -549,29 +682,38 @@ if page == "Visualisation joueur":
     # ------------------------------------------------------------------------------
     # 2)  RECHERCHE + SÉLECTEUR  (protégé contre filtres changeants)
     # ------------------------------------------------------------------------------
-    candidats = df_filt['nom'].dropna().sort_values().unique()
+    candidats = df_filt.sort_values("nom")["player_key"].dropna().unique().tolist()
+    label_map = df_filt.set_index("player_key")["player_label"].to_dict()
 
     # Sécurité si le joueur courant n'est plus dans les filtres
     cur = st.session_state.get("current_player", None)
     if cur and cur not in candidats:
-        candidats = np.insert(candidats, 0, cur)
+        fallback = df_all[df_all["player_key"] == cur]
+        if not fallback.empty:
+            label_map[cur] = fallback.iloc[0]["player_label"]
+            candidats = [cur] + candidats
 
     if len(candidats) == 0:
         st.info("Aucun joueur ne correspond aux critères.")
         st.stop()
 
     # Selectbox (recherche intégrée)
-    idx_default = candidats.tolist().index(cur) if cur in candidats else 0
-    joueur_nom = st.selectbox("Choisis un joueur", candidats, index=idx_default)
-    st.session_state.current_player = joueur_nom
+    idx_default = candidats.index(cur) if cur in candidats else 0
+    joueur_key = st.selectbox(
+        "Choisis un joueur",
+        candidats,
+        index=idx_default,
+        format_func=lambda k: label_map.get(k, k),
+    )
+    st.session_state.current_player = joueur_key
 
 
     # 1)  REMISE À ZÉRO DU GROUPE DE COMPARAISON (avant le selectbox !)
     if (
         "last_joueur" not in st.session_state            # première exécution
-        or st.session_state.last_joueur != joueur_nom    # l’utilisateur a changé de joueur
+        or st.session_state.last_joueur != joueur_key    # l’utilisateur a changé de joueur
     ):
-        st.session_state.last_joueur   = joueur_nom
+        st.session_state.last_joueur   = joueur_key
         st.session_state.compare_group = "Poste équivalent"
         
     # Liste des groupes possibles
@@ -588,7 +730,15 @@ if page == "Visualisation joueur":
     # ------------------------------------------------------------------------------
     # 3)  LIGNE DU JOUEUR  (toujours trouvée dans le df complet)
     # ------------------------------------------------------------------------------
-    joueur = df[df['nom'] == joueur_nom].iloc[0]
+    joueur_match = df[df['player_key'] == joueur_key]
+    if joueur_match.empty:
+        fallback_match = df_all[df_all["player_key"] == joueur_key]
+        if fallback_match.empty:
+            st.warning("Le joueur sélectionné n'existe pas pour ces filtres.")
+            st.stop()
+        joueur = fallback_match.iloc[0]
+    else:
+        joueur = joueur_match.iloc[0]
 
     # Radar
     # Radar et infos joueur
@@ -597,30 +747,52 @@ if page == "Visualisation joueur":
     col_1, col_2 = st.columns([3, 2])  # radar plus large
 
     with col_1:
-        joueur = df[df["nom"] == joueur_nom].iloc[0]
+        joueur = df_all[df_all["player_key"] == joueur_key].iloc[0]
         fig = radar_player_vs_median(df, joueur, features , compare_group=compare_group)
         st.plotly_chart(fig, use_container_width=True)  # use_container_width gère mieux la responsivité
 
     with col_2:
-        #st.image(f"images/photo_{joueur['player_id']}.jpg", caption=joueur_nom, width=200)
-
-        img_base64 = get_image_base64(f"images/photo_{joueur['player_id']}.jpg")
-        st.markdown(
-                f"""
-                <div>
-                    <img src="data:image/webp;base64,{img_base64}" width="200" style="margin-bottom: 5px;" />
-                    <div style="font-weight: 700; font-size: 18px;">
-                        {joueur['nom']}
+        player_img_path = player_photo_path(joueur["player_id"])
+        img_base64 = get_image_base64(player_img_path)
+        if img_base64:
+            st.markdown(
+                    f"""
+                    <div>
+                        <img src="data:image/webp;base64,{img_base64}" width="200" style="margin-bottom: 5px;" />
+                        <div style="font-weight: 700; font-size: 18px;">
+                            {joueur['nom']}
+                        </div>
                     </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-        )
+                    """,
+                    unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"<div style='font-weight: 700; font-size: 18px;'>{joueur['nom']}</div>",
+                unsafe_allow_html=True,
+            )
+
+        logo_path = club_logo_path(joueur["club"])
+        banner_path = club_banner_path(joueur["club"])
+        logo_b64 = get_image_base64(logo_path)
+        banner_b64 = get_image_base64(banner_path)
+        if banner_b64:
+            st.markdown(
+                f"<img src='data:image/webp;base64,{banner_b64}' width='250' style='margin: 8px 0;' />",
+                unsafe_allow_html=True,
+            )
+        if logo_b64:
+            st.markdown(
+                f"<img src='data:image/webp;base64,{logo_b64}' width='90' style='margin-bottom: 8px;' />",
+                unsafe_allow_html=True,
+            )
 
 
 
         st.markdown(f"**Poste** : {joueur['poste']}")
         st.markdown(f"**Club** : {joueur['club']}")
+        st.markdown(f"**Compétition** : {joueur['competition'].upper()}")
+        st.markdown(f"**Saison** : {joueur['season']}")
         st.markdown(f"**Age** : {joueur['age']} ans")
         st.markdown(f"**Taille** : {joueur['taille_cm']} cm")
         st.markdown(f"**Poids** : {joueur['poids_kg']} kg")
@@ -748,20 +920,20 @@ elif page=="Composer mon XV":
     # C)  Callback → met à jour st.session_state.team[pos]
     # ───────────────────────────────────────────────────────────
     def update_team(pos):
-        nom = st.session_state[f"select_{pos}"]
+        player_key = st.session_state[f"select_{pos}"]
 
-        if nom == "AUCUN":
+        if player_key == "AUCUN":
             st.session_state.team[pos] = None
         else:
             # Cherche d'abord dans les candidats du poste
             df_candidats = CANDIDATES[pos]
-            match = df_candidats[df_candidats['nom'] == nom]
+            match = df_candidats[df_candidats['player_key'] == player_key]
 
             if not match.empty:
                 st.session_state.team[pos] = match.iloc[0]
             else:
                 # Si joueur hors poste, on cherche dans tout le df
-                match_global = df[df['nom'] == nom]
+                match_global = df[df['player_key'] == player_key]
                 if not match_global.empty:
                     st.session_state.team[pos] = match_global.iloc[0]
                 else:
@@ -784,20 +956,20 @@ elif page=="Composer mon XV":
 
             # Détermine la source de joueurs : tous ou filtrés par poste
             if poste_libre:
-                candidats = df['nom'].dropna().sort_values().tolist()
+                candidats = df['player_key'].dropna().sort_values().tolist()
             else:
-                candidats = CANDIDATES[pos]['nom'].dropna().sort_values().tolist()
+                candidats = CANDIDATES[pos]['player_key'].dropna().sort_values().tolist()
 
             # Ajout de l’option AUCUN
             options = ["AUCUN"] + candidats
 
             # Récupération du joueur actuellement sélectionné
             current = st.session_state.team[pos]
-            current_nom = current['nom'] if current is not None else "AUCUN"
+            current_nom = current['player_key'] if current is not None else "AUCUN"
 
             # Si le joueur actuellement sélectionné ne fait plus partie des options (filtrage remis)
             if not poste_libre and current_nom != "AUCUN":
-                if current_nom not in CANDIDATES[pos]['nom'].values:
+                if current_nom not in CANDIDATES[pos]['player_key'].values:
                     current_nom = "AUCUN"
                     st.session_state.team[pos] = None  # Réinitialise proprement
 
@@ -810,6 +982,7 @@ elif page=="Composer mon XV":
                 options=options,
                 index=default_index,
                 key=f"select_{pos}",
+                format_func=lambda k: df.set_index("player_key")["player_label"].get(k, k) if k != "AUCUN" else "AUCUN",
                 on_change=update_team,
                 args=(pos,)
             )
@@ -819,12 +992,11 @@ elif page=="Composer mon XV":
     # ───────────────────────────────────────────────────────────
     def player_slot(player , pos):
         if player is None:
-            img_base64 = get_image_base64("images/no_player.webp")
             st.markdown(
                 f"""
                 <div style="display: flex; flex-direction: column; align-items: center;">
-                    <img src="data:image/webp;base64,{img_base64}" width="200" style="margin-bottom: 5px;" />
-                    <div style="text-align: center; font-weight: 700; font-size: 18px;">
+                    <div style="width: 200px; height: 260px; background: #f2f2f2; border-radius: 8px;"></div>
+                    <div style="text-align: center; font-weight: 700; font-size: 18px; margin-top: 6px;">
                         {pos}
                     </div>
                 </div>
@@ -833,18 +1005,31 @@ elif page=="Composer mon XV":
             )
 
         else:
-            img_base64 = get_image_base64(f"images/photo_{player['player_id']}.jpg")
-            st.markdown(
-                f"""
-                <div style="display: flex; flex-direction: column; align-items: center;">
-                    <img src="data:image/webp;base64,{img_base64}" width="200" style="margin-bottom: 5px;" />
-                    <div style="text-align: center; font-weight: 700; font-size: 18px;">
-                        {player['nom']}
+            player_img_path = player_photo_path(player["player_id"])
+            img_base64 = get_image_base64(player_img_path)
+            if img_base64:
+                st.markdown(
+                    f"""
+                    <div style="display: flex; flex-direction: column; align-items: center;">
+                        <img src="data:image/webp;base64,{img_base64}" width="200" style="margin-bottom: 5px;" />
+                        <div style="text-align: center; font-weight: 700; font-size: 18px;">
+                            {player['nom']}
+                        </div>
                     </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div style="display: flex; flex-direction: column; align-items: center;">
+                        <div style="text-align: center; font-weight: 700; font-size: 18px;">
+                            {player['nom']}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
     # ───────────────────────────────────────────────────────────
     # F)  Affiche type FFR
@@ -877,8 +1062,8 @@ elif page=="Composer mon XV":
         ]
 
         POSTES_ARRIERE = [
-            'Mêlée', 'Ouverture',
-            'Aile gauche', 'Premier centre', 'Deuxième centre', 'Aile droite',
+            'Demi de mêlée', "Demi d'ouverture",
+            'Ailier gauche', 'Premier Centre', 'Deuxième Centre', 'Ailier droit',
             'Arrière'
         ]
 
@@ -912,11 +1097,17 @@ elif page=="Composer mon XV":
             # ------------------------------------------------------------------
             # ÉQUIPE RÉFÉRENCE
             # ------------------------------------------------------------------
-            ref_rows = [player_row(pid)[feats] for pos, pid in ref_team_ids.items()
-                        if pos in postes]
-            ref_stats = pd.DataFrame(ref_rows).sum().to_dict()
-            posts_ref = [player_row(pid)["poste"] for pos, pid in ref_team_ids.items()
-                        if pos in postes]
+            ref_rows = []
+            posts_ref = []
+            for pos, pid in ref_team_ids.items():
+                if pos not in postes:
+                    continue
+                ref_player = player_row(pid)
+                if ref_player is None:
+                    continue
+                ref_rows.append(ref_player[feats])
+                posts_ref.append(ref_player["poste"])
+            ref_stats = pd.DataFrame(ref_rows).sum().to_dict() if ref_rows else {feat: 0 for feat in feats}
 
             return my_stats, ref_stats, posts_my, posts_ref
         # ----------------------------------------------------------------------
@@ -965,7 +1156,7 @@ elif page=="Composer mon XV":
         cols_row = st.columns(len(row), gap="small")
         for col, pos in zip(cols_row, row):
             with col:
-                player_slot(player_row(REF_TEAM[pos]), pos)
+                player_slot(player_row(REF_TEAM.get(pos)), pos)
 
 
 
@@ -998,18 +1189,19 @@ elif page == "Recherche similarité":
     # ------------------------------------------------------------------
     # A) Choix du joueur de référence (réutilise autocomplétion existante)
     # ------------------------------------------------------------------
-    noms_sorted = df.sort_values("nom")['nom'].unique().tolist()
-    default_idx = noms_sorted.index(st.session_state.ref_player)
+    noms_sorted = df.sort_values("nom")["player_key"].unique().tolist()
+    default_idx = noms_sorted.index(st.session_state.ref_player) if st.session_state.ref_player in noms_sorted else 0
 
-    ref_nom = st.selectbox(
+    ref_key = st.selectbox(
         "Joueur de référence",
         options = noms_sorted,
         index   = default_idx,                   # ← valeur mémorisée
+        format_func=lambda k: df.set_index("player_key")["player_label"].get(k, k),
         key     = "ref_player_sel",
         on_change = update_ref_player
     )
 
-    ref_row = df[df['nom'] == ref_nom].iloc[0]
+    ref_row = df[df['player_key'] == ref_key].iloc[0]
 
     # ------------------------------------------------------------------
     # B) Choix interactif des POIDS
@@ -1047,7 +1239,7 @@ elif page == "Recherche similarité":
     dists    = np.linalg.norm(X_cand - ref_vec, axis=1)
     df_sim   = df_candidates.assign(distance=dists)\
                              .sort_values("distance")\
-                             .query("nom != @ref_nom")
+                             .query("player_key != @ref_key")
 
     # --------  E)  Affichage des résultats ----------------------------
     n_show = st.slider("Combien de suggestions ?", 3, 30, 10)
@@ -1060,7 +1252,7 @@ elif page == "Recherche similarité":
             st.write(f"**{row['nom']}** – {row['club']} ({row['poste']}) "
                      f"— *dist. {row['distance']:.3f}*")
         with col2:
-            if st.button("Voir", key=f"goto_{row['nom']}"):
-                st.session_state.current_player = row['nom']     # page 1
+            if st.button("Voir", key=f"goto_{row['player_key']}"):
+                st.session_state.current_player = row['player_key']     # page 1
                 st.session_state.current_page   = "Visualisation joueur"
 
