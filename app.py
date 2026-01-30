@@ -208,10 +208,14 @@ with st.sidebar:
     st.markdown("### Filtres globaux (médiane)")
     competitions = sorted(df_all["competition"].dropna().unique())
     seasons = sorted(df_all["season"].dropna().unique())
+    clubs = sorted(df_all["club"].dropna().unique())
     sel_competitions = st.multiselect(
         "Compétitions", options=competitions, default=competitions
     )
     sel_seasons = st.multiselect("Saisons", options=seasons, default=seasons)
+    median_clubs = st.multiselect(
+        "Clubs", options=clubs, default=clubs
+    )
 
 mask_global = pd.Series(True, index=df_all.index)
 if sel_competitions:
@@ -331,8 +335,10 @@ def radar_player_vs_median(df, player_row, features, compare_group='Poste équiv
         mins = sub_union.min()
         maxs = sub_union.max()
 
+    player_vals = pd.to_numeric(player_row[features], errors="coerce")
+    mins = pd.concat([mins, player_vals], axis=1).min(axis=1)
+    maxs = pd.concat([maxs, player_vals], axis=1).max(axis=1)
 
-    
     span       = (maxs - mins).replace(0, 1)
 
     median = round(sub[features].median() , 2)
@@ -674,13 +680,6 @@ if page == "Visualisation joueur":
                                     min_age, max_age, (min_age, max_age), step=1)
         if (min_val_a, max_val_a) != (min_age, max_age):        # l’utilisateur a bougé
             mask &= df_all['age'].between(min_val_a, max_val_a)
-
-        st.markdown("### Filtres médiane")
-        median_clubs = st.multiselect(
-            "Clubs (médiane)",
-            options=clubs,
-            default=clubs,
-        )
 
     df_filt = df_all[mask]
     st.sidebar.markdown(f"**{len(df_filt)} joueur(s)** correspondant(s)")
