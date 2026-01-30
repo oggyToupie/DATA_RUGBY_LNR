@@ -191,8 +191,21 @@ def load_players():
 
 df_all = load_players()
 
+exclude_exact = {
+    'temps_jeu_min', 'taille_cm', 'poids_kg', 'age', 'nombre_matchs_joues', 'ratio_min_matchs',
+    'player_id', 'nom', 'club', 'poste', 'pays', 'ratio_poids_taille', 'ratio_metres_courses',
+    'competition', 'season', 'player_key', 'player_label'
+}
+exclude_pct = [c for c in df_all.columns if c.endswith('_pct')]
+
+for col in df_all.select_dtypes('number'):
+    if col in exclude_exact or col in exclude_pct:
+        continue
+    denom = df_all['temps_jeu_min'].replace(0, np.nan)
+    df_all[col] = round(df_all[col] * 80 / denom, 2).fillna(0)
+
 with st.sidebar:
-    st.markdown("### Filtres globaux")
+    st.markdown("### Filtres globaux (médiane)")
     competitions = sorted(df_all["competition"].dropna().unique())
     seasons = sorted(df_all["season"].dropna().unique())
     sel_competitions = st.multiselect(
@@ -206,23 +219,11 @@ if sel_competitions:
 if sel_seasons:
     mask_global &= df_all["season"].isin(sel_seasons)
 
-df = df_all[mask_global].copy()
-if df.empty:
-    st.warning("Aucune donnée ne correspond aux filtres sélectionnés.")
-    st.stop()
+df_global = df_all[mask_global].copy()
+if df_global.empty:
+    st.warning("Aucune donnée ne correspond aux filtres globaux sélectionnés.")
 
-exclude_exact = {
-    'temps_jeu_min', 'taille_cm', 'poids_kg', 'age', 'nombre_matchs_joues', 'ratio_min_matchs',
-    'player_id', 'nom', 'club', 'poste', 'pays', 'ratio_poids_taille', 'ratio_metres_courses',
-    'competition', 'season', 'player_key', 'player_label'
-}
-exclude_pct = [c for c in df.columns if c.endswith('_pct')]
-
-for col in df.select_dtypes('number'):
-    if col in exclude_exact or col in exclude_pct:
-        continue
-    denom = df['temps_jeu_min'].replace(0, np.nan)
-    df[col] = round(df[col] * 80 / denom, 2).fillna(0)
+df = df_global if not df_global.empty else df_all.copy()
 
 # -----------------------------------------------------------------
 # OUTILS COMMUNS
@@ -643,39 +644,53 @@ if page == "Visualisation joueur":
         )
 
 
-    mask = pd.Series(True, index=df.index)      # tout passe au départ
+    mask = pd.Series(True, index=df_all.index)      # tout passe au départ
 
     with st.sidebar:
         st.markdown("### Filtres (facultatifs)")
 
         # --- Poste --------------------------------------------------------
-        postes = sorted(df['poste'].dropna().unique())
+        postes = sorted(df_all['poste'].dropna().unique())
         sel_postes = st.multiselect("Poste", postes)        # ← défaut = []
         if sel_postes:                                      # seulement si on a coché
-            mask &= df['poste'].isin(sel_postes)
+            mask &= df_all['poste'].isin(sel_postes)
 
         # --- Club ---------------------------------------------------------
-        clubs = sorted(df['club'].dropna().unique())
+        clubs = sorted(df_all['club'].dropna().unique())
         sel_clubs = st.multiselect("Club", clubs)           # défaut = []
         if sel_clubs:
-            mask &= df['club'].isin(sel_clubs)
+            mask &= df_all['club'].isin(sel_clubs)
 
         # --- Temps de jeu (double-slider plage complète en défaut) --------
-        min_min, max_min = int(df['temps_jeu_min'].min()), int(df['temps_jeu_min'].max())
+        min_min, max_min = int(df_all['temps_jeu_min'].min()), int(df_all['temps_jeu_min'].max())
         min_val, max_val = st.slider("Intervalle minutes jouées",
                                     min_min, max_min, (min_min, max_min), step=10)
         if (min_val, max_val) != (min_min, max_min):        # l’utilisateur a bougé
-            mask &= df['temps_jeu_min'].between(min_val, max_val)
+            mask &= df_all['temps_jeu_min'].between(min_val, max_val)
 
         # --- Âge max (slider inversé) ------------------------------------
-        min_age, max_age = int(df['age'].min()), int(df['age'].max())
+        min_age, max_age = int(df_all['age'].min()), int(df_all['age'].max())
         min_val_a, max_val_a = st.slider("Intervalle d'âge",
                                     min_age, max_age, (min_age, max_age), step=1)
         if (min_val_a, max_val_a) != (min_age, max_age):        # l’utilisateur a bougé
-            mask &= df['age'].between(min_val_a, max_val_a)
+            mask &= df_all['age'].between(min_val_a, max_val_a)
 
-    df_filt = df[mask]
+        st.markdown("### Filtres médiane")
+        median_clubs = st.multiselect(
+            "Clubs (médiane)",
+            options=clubs,
+            default=clubs,
+        )
+
+    df_filt = df_all[mask]
     st.sidebar.markdown(f"**{len(df_filt)} joueur(s)** correspondant(s)")
+
+    df_median = df_global.copy()
+    if median_clubs:
+        df_median = df_median[df_median["club"].isin(median_clubs)]
+    if df_median.empty:
+        st.warning("Aucune donnée ne correspond aux filtres de médiane, affichage sur l'ensemble des données.")
+        df_median = df_all.copy()
 
 
 
@@ -730,7 +745,7 @@ if page == "Visualisation joueur":
     # ------------------------------------------------------------------------------
     # 3)  LIGNE DU JOUEUR  (toujours trouvée dans le df complet)
     # ------------------------------------------------------------------------------
-    joueur = df[df['player_key'] == joueur_key].iloc[0]
+    joueur = df_all[df_all['player_key'] == joueur_key].iloc[0]
 
     # Radar
     # Radar et infos joueur
@@ -739,8 +754,8 @@ if page == "Visualisation joueur":
     col_1, col_2 = st.columns([3, 2])  # radar plus large
 
     with col_1:
-        joueur = df[df["player_key"] == joueur_key].iloc[0]
-        fig = radar_player_vs_median(df, joueur, features , compare_group=compare_group)
+        joueur = df_all[df_all["player_key"] == joueur_key].iloc[0]
+        fig = radar_player_vs_median(df_median, joueur, features , compare_group=compare_group)
         st.plotly_chart(fig, use_container_width=True)  # use_container_width gère mieux la responsivité
 
     with col_2:
@@ -803,8 +818,8 @@ if page == "Visualisation joueur":
     st.markdown(f"### Statistiques détaillées /80min et Positionnement Centile par rapport à {poste_reel}")
 
     # -------- 1. sous-ensemble de référence (même logique que dans ton radar)
-    sub = df.loc[
-        (df["poste"] == poste_reel) & (df["temps_jeu_min"] > 200),
+    sub = df_median.loc[
+        (df_median["poste"] == poste_reel) & (df_median["temps_jeu_min"] > 200),
         features
     ].copy()
 
